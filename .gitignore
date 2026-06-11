@@ -1,4 +1,4 @@
-# ==================== LaTeX 辅助文件 ====================
+# LaTeX
 *.aux
 *.log
 *.fdb_latexmk
@@ -10,11 +10,13 @@
 *.bbl
 *.blg
 *.synctex.gz
+*.synctex(busy)
 *.xdv
+*.nav
+*.snm
+*.vrb
 
-# build 目录下的所有文件（推荐）
-论文/build/*
-!论文/build/.gitkeep   # 如果你想保留空目录
-
-# 或者直接忽略整个 build 目录（最简单）
-论文/build/
+# Build directory
+**/build/
+**/_build/
+**/.latexmk/
