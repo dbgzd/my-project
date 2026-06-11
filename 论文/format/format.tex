@@ -42,6 +42,22 @@ urlcolor=black
 \makeindex
 \pagestyle{fancy}
 
+%============================= 摘要环境定义 ================================%
+% 提供中文和英文摘要环境，渲染为无编号章节并加入目录
+\newenvironment{abstractCN}{%
+  \chapter*{摘要}%
+  \itshape
+}{%
+  \par\addcontentsline{toc}{chapter}{摘要}\cleardoublepage
+}
+\newenvironment{abstractEN}{%
+  \chapter*{Abstract}%
+  \itshape
+}{%
+  \par\addcontentsline{toc}{chapter}{Abstract}\cleardoublepage
+}
+
+
 \renewcommand{\headrulewidth}{0.4pt}
 \fancyfoot[RO,LE]{\thepage}
 \fancyfoot[CO,CE]{}
