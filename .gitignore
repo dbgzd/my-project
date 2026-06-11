@@ -1,0 +1,20 @@
+# ==================== LaTeX 辅助文件 ====================
+*.aux
+*.log
+*.fdb_latexmk
+*.fls
+*.lof
+*.lot
+*.out
+*.toc
+*.bbl
+*.blg
+*.synctex.gz
+*.xdv
+
+# build 目录下的所有文件（推荐）
+论文/build/*
+!论文/build/.gitkeep   # 如果你想保留空目录
+
+# 或者直接忽略整个 build 目录（最简单）
+论文/build/
