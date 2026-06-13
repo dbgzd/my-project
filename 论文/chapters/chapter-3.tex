@@ -1,22 +1,106 @@
-\chapter{情感 - 主题联合分析模型设计}
+\chapter{情感-主题联合分析模型设计}
 \label{ch:model}
 
 \section{整体模型框架}
 \label{sec:overall_framework}
-% TODO: 描述整体架构图与信息流
+为了解决文本中主题结构与情感极性之间的耦合关系，本研究提出一个分层的情感-主题联合分析框架。总体上，系统由三大模块组成：主题建模模块（基于稀疏注意力增强的 Sparse-HDP）、情感判别模块（基于微调的大语言模型，采用 QLoRA 技术以降低资源消耗）与融合模块（将主题分布与情感表示融合为联合输出）。
+
+数据流如下：文本预处理 → 文档表示与候选词提取 → 稀疏主题学习（输出主题分布与主题词）→ 情感微调模块对句子/段落打分 → 融合模块统一生成文档层级的主题-情感标签与可解释性提示。
+
+该框架兼顾可解释性与可扩展性：主题模块提供稀疏、可读的主题词表；情感模块利用大模型捕捉语境和细粒度情感；融合模块提供按主题分配的情感强度，便于下游统计分析与可视化。
 
 \section{稀疏注意力增强 Sparse-HDP 模型}
 \label{sec:sparse_hdp}
-% TODO: Sparse-HDP 的模型结构、推断与训练策略
+为在分层模型中获得稀疏且可解释的主题表达，我们在传统的 Hierarchical Dirichlet Process (HDP) 框架上引入注意力稀疏化机制（Sparse Attention）。模型的核心思想是：在文档-单词到主题的分配过程中，采用带温度和稀疏化的注意力权重以抑制噪声词的影响，从而提升主题可读性与下游情感关联性。
+
+模型的生成过程（简要）:
+
+1. 全局主题库由基于 GEM 过程的 stick-breaking 生成。
+2. 每篇文档有自己的主题混合分布 $\theta_d$，服从基于全局权重的 Dirichlet 过程变体。
+3. 对于文档中的每个词 $w_{dn}$，先计算候选主题的注意力得分 $a_{k}\propto\exp\left(\frac{\phi_k^{\top} x_{dn}}{\tau}\right)$，其中 $\phi_k$ 为主题 $k$ 的词向量表征，$x_{dn}$ 为词或上下文向量，$\tau$ 为温度参数。
+4. 为保证稀疏性，采用 Top-K 截断或 entmax/sparsemax 归一化代替 softmax：
+$$\tilde{a}=\mathrm{sparsemax}(a)\quad\text{或}\quad\tilde{a}=\mathrm{entmax}_\alpha(a).$$
+5. 最终主题分配基于 $\tilde{a}$ 与 HDP 的先验混合决定，使用变分推断或带采样的近似推断完成参数估计。
+
+推断与训练策略：
+- 初始用基于词袋和 TF-IDF 的候选词表启动主题中心向量 $\phi_k$。
+- 使用小批量变分推断（stochastic variational inference）在大语料上训练；在每次更新中，稀疏注意力约束通过 entmax 操作保证每个词只激活少数主题，从而降低噪声传播。
+- 为增强情感相关性，可在变分目标中加入情感相关的判别项（见下文融合策略），以引导主题学习更好地对齐情感表征。
+
+优点：稀疏注意力使主题更具可解释性；HDP 保持主题数自适应；结合变分优化可扩展到大语料。
 
 \section{QLoRA 微调大模型情感分析模块}
 \label{sec:qlora_module}
-% TODO: QLoRA 微调流程、数据与超参
+本模块以预训练大语言模型（如 LLaMA、Mistral 或开源的中文大模型）为基础，采用 QLoRA（Quantized LoRA）策略对其进行低成本微调，以便在有限资源下获得文本级和句子级的情感判别能力。
 
-\section{主题 - 情感融合策略}
+关键步骤：
+
+1. 数据准备：生成包含句子/段落的带标签训练集，标签可为极性（正/中/负）、强度评分或情感类别。对于弱监督场景，可结合情感词典与规则自动标注，再用人工校验小样本微调。
+2. 量化与低秩适配：先将基础模型进行 4-bit 或 8-bit 的量化（使用 QLoRA 推荐的量化方案），然后在量化模型上插入 LoRA 矩阵（低秩适配层）并只训练这些额外参数以显著减少 GPU/显存需求。
+3. 训练与正则：采用小学习率（$10^{-5}\sim10^{-4}$）、梯度裁剪和权重衰减；对类别不平衡采用重采样或加权损失。
+
+超参数示例（起点建议）:
+- 学习率：$2\times10^{-5}$
+- LoRA rank：4~16（根据资源与任务复杂度调整）
+- 批大小：微调时 16~64（视显存而定）
+- 量化位数：4-bit 在多任务上通常可接受，8-bit 更稳健。
+
+输出与接口：情感模块对每个输入返回情感向量 $s\in\mathbb{R}^C$（$C$ 为类别或维度），并同时给出置信度与解释性提示（如重要词或高权重 token）。这些输出将作为融合模块的输入。
+
+\section{主题-情感融合策略}
 \label{sec:fusion}
-% TODO: 如何融合主题与情感输出，输出格式定义
+融合模块的目标是将主题分布 $\theta_d$ 与情感表示 $s$ 结合，生成按主题细分的情感分布与可解释性输出，便于在文档或语料级上分析“某主题的情感倾向”。
+
+融合设计要点：
+
+- 逐主题情感投影：对文档中每个主题 $k$，构建主题情感得分
+$$S_{d,k}=f_{proj}(\theta_{d,k}, s, Z_k)$$
+其中 $Z_k$ 为主题关键词或主题嵌入，$f_{proj}$ 可以是简单的线性层、注意力融合或小型 MLP。常用形式为加权和：
+$$S_{d,k}=\lambda_1\theta_{d,k}+\lambda_2\mathrm{atten}(s, Z_k)$$
+注：$\mathrm{atten}(\cdot)$ 表示基于 $s$ 与主题词向量的注意力得分。
+
+- 层级聚合：可在句子级先计算句子-主题情感，再沿文档层级进行加权平均以获得文档-主题情感。
+- 可解释性输出：为每个主题返回若干高贡献词和对应情感强度，便于人工检验与可视化。
+
+为了保证融合模块稳定训练，可采用联合优化策略：在训练过程中同时最小化情感判别损失与融合一致性损失（例如使按主题聚合后的情感预测与文档级情感标签一致）。
 
 \section{模型算法流程与伪代码}
 \label{sec:algorithms}
-% TODO: 给出关键算法伪代码与流程图
+下面给出一个高层的算法流程，便于实现参考。
+
+\begin{verbatim}
+Input: 语料集合 D, 预训练大模型 M, 超参数
+Output: 每篇文档的主题分布 theta_d 与主题级情感 S_{d,k}
+
+1: 预处理语料 D，分词、去停用词、构建词向量/上下文向量
+2: 初始化主题中心 phi_k（基于 KMeans/TF-IDF）
+3: 在主题模块上运行稀疏注意力增强的变分推断，得到 theta_d 和 phi_k
+4: 构建情感标注数据（人工/弱监督），使用 QLoRA 在 M 上微调，得到情感函数 g(x) -> s
+5: 对每篇文档 d，计算情感向量 s_d（可在句子级获得 s_{d,i} 并聚合）
+6: 对每个主题 k 计算 S_{d,k}=f_{proj}(theta_{d,k}, s_d, Z_k)
+7: 输出并存储主题关键词、S_{d,k} 以及可解释性附件（高贡献词）
+\end{verbatim}
+
+上述流程在实现时可并行化：步骤 3（主题学习）与步骤 4（情感微调）可以并行进行，仅在融合阶段需要同步输出结果。
+
+\subsection{伪代码：主题-情感联合训练（联合损失）}
+为使主题学习更好地对齐情感信息，可采用联合训练的思路，联合损失形式为：
+$$\mathcal{L}=\mathcal{L}_{topic}+\alpha\mathcal{L}_{sent}+\beta\mathcal{L}_{consis},$$
+其中 $\mathcal{L}_{topic}$ 为主题模型的变分下界，$\mathcal{L}_{sent}$ 为情感判别损失，$\mathcal{L}_{consis}$ 为融合一致性损失，$\alpha,\beta$ 为权重超参。
+
+伪代码示例：
+\begin{verbatim}
+for epoch in 1..E:
+	for minibatch in corpus:
+		update topic parameters via SVI with entmax attention
+		compute s for minibatch using current QLoRA model
+		compute fusion outputs and consistency loss
+		backpropagate fused loss to fusion params (and optionally to topic embeddings)
+	if validation improves:
+		save checkpoint
+end
+\end{verbatim}
+
+\section{小结}
+本章提出的情感-主题联合分析模型通过在 HDP 框架中引入稀疏注意力机制，获得了既稀疏又可解释的主题表示；并通过 QLoRA 在量化模型上低成本获取精确的情感表示。融合模块将两者结合，产出按主题细化的情感分析结果，兼顾可解释性与扩展性。下一步将在第~4~章中介绍模型实现细节与实验设计。
+

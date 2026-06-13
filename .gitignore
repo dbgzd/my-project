@@ -15,6 +15,10 @@
 *.nav
 *.snm
 *.vrb
+*.idx
+*.ind
+*.ilg
+*.pdf
 
 # Build directory
 **/build/
